@@ -297,7 +297,14 @@ typedef struct zlentry {
 
 /* Extract the encoding from the byte pointed by 'ptr' and set it into
  * 'encoding' field of the zlentry structure. */
-#define ZIP_ENTRY_ENCODING(ptr, encoding) do {  \
+/**
+ * 从ziplist中查找目标<entry>并返回其<entry>地址
+ * @param ptr      IN 指向<entry>的<encoding>属性
+ * @param encoding OUT 数值编码则直接返回<encoding>属性的第一个字节值，字符编码则将<encoding>属性第一个字节保留高2位返回
+ * <encoding>属性第一个字节即可判断为何种编码
+ * 字符串编码共3中，分别为 00pppppp、01pppppp、10000000 这三种编码只需要高2位即可判断编码
+ */
+#define ZIP_ENTRY_ENCODING(ptr, encoding) do { \
     (encoding) = (ptr[0]); \
     if ((encoding) < ZIP_STR_MASK) (encoding) &= ZIP_STR_MASK; \
 } while(0)
@@ -305,11 +312,11 @@ typedef struct zlentry {
 /* Return bytes needed to store integer encoded by 'encoding'. */
 unsigned int zipIntSize(unsigned char encoding) {
     switch(encoding) {
-    case ZIP_INT_8B:  return 1;
-    case ZIP_INT_16B: return 2;
-    case ZIP_INT_24B: return 3;
-    case ZIP_INT_32B: return 4;
-    case ZIP_INT_64B: return 8;
+    case ZIP_INT_8B:  return 1;// 11111110编码，使用1字节保存一个整数
+    case ZIP_INT_16B: return 2;// 11000000编码，使用2字节保存一个整数
+    case ZIP_INT_24B: return 3;// 11110000编码，使用3字节保存一个整数
+    case ZIP_INT_32B: return 4;// 11010000编码，使用4字节保存一个整数
+    case ZIP_INT_64B: return 8;// 11100000编码，使用8字节保存一个整数
     }
     if (encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX)
         return 0; /* 4 bit immediate */
@@ -368,6 +375,13 @@ unsigned int zipStoreEntryEncoding(unsigned char *p, unsigned char encoding, uns
  * The 'encoding' variable will hold the entry encoding, the 'lensize'
  * variable will hold the number of bytes required to encode the entry
  * length, and the 'len' variable will hold the entry length. */
+/**
+ * 从ziplist中查找目标<entry>并返回其<entry>地址
+ * @param ptr      IN 指向<entry>的<encoding>属性
+ * @param encoding OUT 数值编码为<encoding>的第一个字节，字符编码为<encoding>的第一个字节的高2位
+ * @param lensize  OUT <encoding>属性占用字节
+ * @param len      OUT <entry-data>属性的占用字节
+ */
 #define ZIP_DECODE_LENGTH(ptr, encoding, lensize, len) do {                    \
     ZIP_ENTRY_ENCODING((ptr), (encoding));                                     \
     if ((encoding) < ZIP_STR_MASK) {                                           \
@@ -420,6 +434,14 @@ unsigned int zipStorePrevEntryLength(unsigned char *p, unsigned int len) {
 
 /* Return the number of bytes used to encode the length of the previous
  * entry. The length is returned by setting the var 'prevlensize'. */
+/**
+ * 解析此<entry>包含的<prelen>属性所占用的字节
+ * @param ptr         IN  <entry>首地址
+ * @param prevlensize OUT <prelen>属性占用的字节
+ * 若前驱节点长度小于254，则使用1字节存储前驱节点长度。即第一个字节的大小小于254
+ * 否则，使用5字节，并且第一个字节固定为254，剩下4个字节存储前驱节点长度。即第一个字节的大小等于254
+ * 综上，可以用ptr[0]的大小判定<prevlen>占用1字节还是5字节
+ */
 #define ZIP_DECODE_PREVLENSIZE(ptr, prevlensize) do {                          \
     if ((ptr)[0] < ZIP_BIG_PREVLEN) {                                          \
         (prevlensize) = 1;                                                     \
@@ -477,10 +499,19 @@ unsigned int zipRawEntryLength(unsigned char *p) {
 
 /* Check if string pointed to by 'entry' can be encoded as an integer.
  * Stores the integer value in 'v' and its encoding in 'encoding'. */
+/**
+ * 尝试将entry字符串转数值并进行编码
+ * @param entry    IN  待转换字符串
+ * @param entrylen IN  待转换字符串
+ * @param v        OUT 转换后数值
+ * @param encoding OUT 转换后数值对应编码
+ * @return 0 表示转换失败 1 表示成功
+ */
 int zipTryEncoding(unsigned char *entry, unsigned int entrylen, long long *v, unsigned char *encoding) {
     long long value;
 
     if (entrylen >= 32 || entrylen == 0) return 0;
+    /* 将字符串entry转换为数值到value */
     if (string2ll((char*)entry,entrylen,&value)) {
         /* Great, the string can be encoded. Check what's the smallest
          * of our encoding types that can hold this value. */
@@ -534,6 +565,12 @@ void zipSaveInteger(unsigned char *p, int64_t value, unsigned char encoding) {
 }
 
 /* Read integer encoded as 'encoding' from 'p' */
+/**
+ * 将p所指向的<entry-data>提取为数值
+ * @param p IN 指向<entry-data>属性
+ * @param encoding IN 数值的编码类型
+ * @return <entry-data>中的数值
+ */
 int64_t zipLoadInteger(unsigned char *p, unsigned char encoding) {
     int16_t i16;
     int32_t i32;
@@ -1105,6 +1142,14 @@ unsigned int ziplistCompare(unsigned char *p, unsigned char *sstr, unsigned int 
 
 /* Find pointer to the entry equal to the specified entry. Skip 'skip' entries
  * between every comparison. Returns NULL when the field could not be found. */
+/**
+ * 从ziplist中查找目标<entry>并返回其<entry>地址
+ * @param p    IN 指定从ziplist的哪个节点开始查找，即指指向此<entry>的首地址
+ * @param vstr IN 待查找元素的内容
+ * @param vlen IN 待查找元素的内容
+ * @param skip IN 隔多少个节点才执行一次元素对比操作，而非跳过已经匹配的节点。
+ * @return 返回目标<entry>的首地址
+ */
 unsigned char *ziplistFind(unsigned char *p, unsigned char *vstr, unsigned int vlen, unsigned int skip) {
     int skipcnt = 0;
     unsigned char vencoding = 0;
@@ -1114,8 +1159,11 @@ unsigned char *ziplistFind(unsigned char *p, unsigned char *vstr, unsigned int v
         unsigned int prevlensize, encoding, lensize, len;
         unsigned char *q;
 
+        /* prevlensize 表示<prelen>属性占用的字节 */
         ZIP_DECODE_PREVLENSIZE(p, prevlensize);
+        /* lensize <encoding>属性占用字节，len代表<entry-data>属性的占用字节 */
         ZIP_DECODE_LENGTH(p + prevlensize, encoding, lensize, len);
+        /* q 指向<entry-data>属性 */
         q = p + prevlensize + lensize;
 
         if (skipcnt == 0) {
@@ -1129,6 +1177,7 @@ unsigned char *ziplistFind(unsigned char *p, unsigned char *vstr, unsigned int v
                  * we do it only the first time, once done vencoding is set
                  * to non-zero and vll is set to the integer value. */
                 if (vencoding == 0) {
+                    /* 尝试将vstr字符串转数值并进行编码，此过程仅执行一次 */
                     if (!zipTryEncoding(vstr, vlen, &vll, &vencoding)) {
                         /* If the entry can't be encoded we set it to
                          * UCHAR_MAX so that we don't retry again the next
