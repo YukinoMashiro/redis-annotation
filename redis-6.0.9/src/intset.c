@@ -112,6 +112,13 @@ static intset *intsetResize(intset *is, uint32_t len) {
  * sets "pos" to the position of the value within the intset. Return 0 when
  * the value is not present in the intset and sets "pos" to the position
  * where "value" can be inserted. */
+/**
+ * 二分法查找元素
+ * @param is    IN  待搜索的整数数据结构
+ * @param value IN  待搜索的数值
+ * @param pos   OUT 搜索后待插入的位置
+ * @return  0 代表value不在集合中 1代表value在集合中
+ */
 static uint8_t intsetSearch(intset *is, int64_t value, uint32_t *pos) {
     int min = 0, max = intrev32ifbe(is->length)-1, mid = -1;
     int64_t cur = -1;
@@ -161,16 +168,21 @@ static intset *intsetUpgradeAndAdd(intset *is, int64_t value) {
     int prepend = value < 0 ? 1 : 0;
 
     /* First set new encoding and resize */
+    /* 设置新的编码，并分配新的内存空间 */
     is->encoding = intrev32ifbe(newenc);
     is = intsetResize(is,intrev32ifbe(is->length)+1);
 
     /* Upgrade back-to-front so we don't overwrite values.
      * Note that the "prepend" variable is used to make sure we have an empty
      * space at either the beginning or the end of the intset. */
+    /* 将intset的元素移到新的位置，新元素的编码级别比intset所有元素高，要么插入元素为正数，比所有元素都大，应该插到末尾，
+     * 要么为负数，比所有元素都小，应该插到首
+     * */
     while(length--)
         _intsetSet(is,length+prepend,_intsetGetEncoded(is,length,curenc));
 
     /* Set the value at the beginning or the end. */
+    /* 插入新元素 */
     if (prepend)
         _intsetSet(is,0,value);
     else
@@ -202,6 +214,7 @@ static void intsetMoveTail(intset *is, uint32_t from, uint32_t to) {
 
 /* Insert an integer in the intset */
 intset *intsetAdd(intset *is, int64_t value, uint8_t *success) {
+    /* 获取元素的编码 */
     uint8_t valenc = _intsetValueEncoding(value);
     uint32_t pos;
     if (success) *success = 1;
@@ -209,6 +222,7 @@ intset *intsetAdd(intset *is, int64_t value, uint8_t *success) {
     /* Upgrade encoding if necessary. If we need to upgrade, we know that
      * this value should be either appended (if > 0) or prepended (if < 0),
      * because it lies outside the range of existing values. */
+    /* 如果插入元素编码级别高于inset编码，则需要升级intset编码格式 */
     if (valenc > intrev32ifbe(is->encoding)) {
         /* This always succeeds, so we don't need to curry *success. */
         return intsetUpgradeAndAdd(is,value);
@@ -216,15 +230,17 @@ intset *intsetAdd(intset *is, int64_t value, uint8_t *success) {
         /* Abort if the value is already present in the set.
          * This call will populate "pos" with the right position to insert
          * the value when it cannot be found. */
+        /* 使用二分查找法查找插入的位置 */
         if (intsetSearch(is,value,&pos)) {
             if (success) *success = 0;
             return is;
         }
-
+        /* 为intset重新分配空间用于插入元素 */
         is = intsetResize(is,intrev32ifbe(is->length)+1);
+        /* 将插入位置后面的元素向后移动 */
         if (pos < intrev32ifbe(is->length)) intsetMoveTail(is,pos,pos+1);
     }
-
+    /* 为插入位置赋值 */
     _intsetSet(is,pos,value);
     is->length = intrev32ifbe(intrev32ifbe(is->length)+1);
     return is;

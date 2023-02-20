@@ -452,12 +452,13 @@ int anetWrite(int fd, char *buf, int count)
 }
 
 static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog) {
+    /* 绑定到固定端口 */
     if (bind(s,sa,len) == -1) {
         anetSetError(err, "bind: %s", strerror(errno));
         close(s);
         return ANET_ERR;
     }
-
+    /* 服务器套接字转换到可接收状态 */
     if (listen(s, backlog) == -1) {
         anetSetError(err, "listen: %s", strerror(errno));
         close(s);
@@ -476,6 +477,15 @@ static int anetV6Only(char *err, int s) {
     return ANET_OK;
 }
 
+/**
+ *
+ * @param err 用于记录错误信息
+ * @param port 绑定端口
+ * @param bindaddr 绑定IP
+ * @param af 指定类型为IPv4或者IPv6
+ * @param backlog
+ * @return
+ */
 static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog)
 {
     int s = -1, rv;
@@ -487,17 +497,21 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
     hints.ai_family = af;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;    /* No effect if bindaddr != NULL */
-
+    /* 将主机名或点十分格式的IP地址转换为数值类型的IP地址 */
     if ((rv = getaddrinfo(bindaddr,_port,&hints,&servinfo)) != 0) {
         anetSetError(err, "%s", gai_strerror(rv));
         return ANET_ERR;
     }
+    /* 处理getaddrinfo函数返回的所有IP地址 */
     for (p = servinfo; p != NULL; p = p->ai_next) {
+        /* 调用C语言的 socket函数，打开套接字 */
         if ((s = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1)
             continue;
-
+        /* anetV6Only函数开启IPv6连接的IPV6_V6ONLY标志，限制该连接仅能发送和接收IPv6数据包 */
         if (af == AF_INET6 && anetV6Only(err,s) == ANET_ERR) goto error;
+        /* 开启TCP的SO_REUSEADDR选项，保证端口释放后可以立即被再次使用 */
         if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
+        /* 监听端口 */
         if (anetListen(err,s,p->ai_addr,p->ai_addrlen,backlog) == ANET_ERR) s = ANET_ERR;
         goto end;
     }

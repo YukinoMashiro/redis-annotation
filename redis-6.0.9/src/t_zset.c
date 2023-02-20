@@ -136,52 +136,99 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
 
     serverAssert(!isnan(score));
     x = zsl->header;
+    /* 根据score参数，定位并标志每层插入位置的前驱节点
+     * rank数组用来记录每层插入位置的前驱节点索引
+     * update数组用来记录每层插入位置的前驱节点
+     * for部分用于跳转到下一层
+     * */
     for (i = zsl->level-1; i >= 0; i--) {
         /* store rank that is crossed to reach the insert position */
+        /* 当遍历的是顶层时，那么rank记录顶层的索引初始值为0
+         * 当遍历的是非顶层，那么rank记录本层的索引值应该加上上一层记录的索引值才是当前初始的索引值
+         * */
         rank[i] = i == (zsl->level-1) ? 0 : rank[i+1];
+        /* while部分用于本层向后遍历
+         * 如果后驱节点存在，并且当前节点的score值小于插入值的score，
+         * 那么应该继续往本层后遍历
+         * */
         while (x->level[i].forward &&
                 (x->level[i].forward->score < score ||
                     (x->level[i].forward->score == score &&
                     sdscmp(x->level[i].forward->ele,ele) < 0)))
         {
+            /* x 跳转到后驱节点，那么rank当然也要更新到后驱节点的索引咯 */
             rank[i] += x->level[i].span;
             x = x->level[i].forward;
         }
+        /* 记录当前层插入位置的前驱节点 */
         update[i] = x;
     }
     /* we assume the element is not already inside, since we allow duplicated
      * scores, reinserting the same element should never happen since the
      * caller of zslInsert() should test in the hash table if the element is
      * already inside or not. */
+    /* 随机生成新节点的层数 */
     level = zslRandomLevel();
+    /* 如果新节点的层数比其他节点都大，那么skiplist需要添加新的层(头节点需要添加新的层) */
     if (level > zsl->level) {
         for (i = zsl->level; i < level; i++) {
+            /* 当前层插入位置的前驱节点索引为0，即头节点 */
             rank[i] = 0;
+            /* 当前层插入位置的前驱节点为头节点 */
             update[i] = zsl->header;
+            /* 头节点新增的层的span为skiplist的长度，这个应该是skiplist的规则？无所谓了，后面插入了元素应该会更新span */
             update[i]->level[i].span = zsl->length;
         }
+        /* 修改ziplist的层数 */
         zsl->level = level;
     }
+    /* 为新增的节点分配空间 */
     x = zslCreateNode(level,score,ele);
+    /* 遍历各层，插入新节点并更新前驱节点的属性 */
     for (i = 0; i < level; i++) {
+        /* 将x插入到前驱节点后 */
         x->level[i].forward = update[i]->level[i].forward;
         update[i]->level[i].forward = x;
 
         /* update span covered by update[i] as x is inserted here */
+        /* 2. 更新前驱节点的span值
+         * rank[0]代表第一层新节点的前驱节点的索引
+         * rank[0] + 1 代表第一层新节点的索引，即整个节点的索引
+         * rank[i]代表第i层新节点的前驱节点的索引。
+         * 因为新节点的每一层节点的索引都是一样的，因此第一层节点的索引即是第i层节点的索引
+         * 新节点的索引值(rank[0] + 1) - 前驱节点的索引值(rank[i]) = 前驱节点的span，即update[i]->level[i].span = (rank[0] - rank[i]) + 1
+         *
+         * 1. 更新插入节点的span值
+         * rank[0] - rank[i] 代表新插入节点的索引减去前驱节点的索引，即新插入节点与前驱节点中间的间隔
+         * update[i]->level[i].span 表示前驱的span，即前驱节点与后驱节点的中间的间隔
+         * update[i]->level[i].span - (rank[0] - rank[i]),即代表新插入节点与后驱节点的差距，即加入节点的span
+         * */
+
+        /* 更新插入节点的span值 */
         x->level[i].span = update[i]->level[i].span - (rank[0] - rank[i]);
+        /* 更新前驱节点的span值 */
         update[i]->level[i].span = (rank[0] - rank[i]) + 1;
     }
 
     /* increment span for untouched levels */
+    /* 这种情况是新加节点随机生成的level比ziplist的level小
+     * 那么必然存在由于新节点的加入，比level高的层的前驱节点的span需要+1
+     * */
     for (i = level; i < zsl->level; i++) {
         update[i]->level[i].span++;
     }
 
+    /*
+     * backward是节点的前驱指针，并非每一层都有前驱指针，backward是zskiplistNode的一个属性，指向第一层的节点
+     * */
     x->backward = (update[0] == zsl->header) ? NULL : update[0];
+    /* 更新新插入节点的后驱节点的前驱指针 */
     if (x->level[0].forward)
         x->level[0].forward->backward = x;
     else
+        /* 新加入节点在尾上 */
         zsl->tail = x;
+    /* 更新skiplist的length属性 */
     zsl->length++;
     return x;
 }
@@ -498,13 +545,26 @@ unsigned long zslGetRank(zskiplist *zsl, double score, sds ele) {
 }
 
 /* Finds an element by its rank. The rank argument needs to be 1-based. */
+/**
+ * 通过索引获取跳表节点
+ * @param zsl
+ * @param rank 索引，相当于数组索引
+ * @return
+ */
 zskiplistNode* zslGetElementByRank(zskiplist *zsl, unsigned long rank) {
     zskiplistNode *x;
     unsigned long traversed = 0;
     int i;
 
     x = zsl->header;
+    /* 从头节点的最高层进行查找
+     * for这部分用于跳到下一层查找
+     * */
     for (i = zsl->level-1; i >= 0; i--) {
+        /* 如果后驱节点存在，并且后驱节点的索引值小于目标的索引值，就沿着forward继续查找，traversed代表当前节点的索引值，
+         * 每次跳转到后驱节点该变量都需要加上span，得到后驱节点的索引值
+         * while这部分是同层查找
+         * */
         while (x->level[i].forward && (traversed + x->level[i].span) <= rank)
         {
             traversed += x->level[i].span;

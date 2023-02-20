@@ -148,10 +148,12 @@ int dictExpand(dict *d, unsigned long size)
 {
     /* the size is invalid if it is smaller than the number of
      * elements already inside the hash table */
+    /* 正在扩容或者扩容后的大小小于已使用的数量视作异常情况 */
     if (dictIsRehashing(d) || d->ht[0].used > size)
         return DICT_ERR;
 
     dictht n; /* the new hash table */
+    /* 将size调整为2的n次幂 */
     unsigned long realsize = _dictNextPower(size);
 
     /* Rehashing to the same table size is not useful. */
@@ -165,12 +167,14 @@ int dictExpand(dict *d, unsigned long size)
 
     /* Is this the first initialization? If so it's not really a rehashing
      * we just set the first hash table so that it can accept keys. */
+    /* 字典的hash表数组还没有初始化，将新的dictht赋值给ht[0] */
     if (d->ht[0].table == NULL) {
         d->ht[0] = n;
         return DICT_OK;
     }
 
     /* Prepare a second hash table for incremental rehashing */
+    /* 将新的dictht赋值给ht[1]，并将rehashidx为0，rehashidx代表下次扩容单步操作要迁移的ht[0]hash表的索引 */
     d->ht[1] = n;
     d->rehashidx = 0;
     return DICT_OK;
@@ -187,6 +191,7 @@ int dictExpand(dict *d, unsigned long size)
  * work it does would be unbound and the function may block for a long time. */
 int dictRehash(dict *d, int n) {
     int empty_visits = n*10; /* Max number of empty buckets to visit. */
+    /* 如果当前字典没有扩容，则直接退出函数 */
     if (!dictIsRehashing(d)) return 0;
 
     while(n-- && d->ht[0].used != 0) {
@@ -195,12 +200,15 @@ int dictRehash(dict *d, int n) {
         /* Note that rehashidx can't overflow as we are sure there are more
          * elements because ht[0].used != 0 */
         assert(d->ht[0].size > (unsigned long)d->rehashidx);
+        /* 从rehashidx开始，找到桶中非空冲突链 */
         while(d->ht[0].table[d->rehashidx] == NULL) {
             d->rehashidx++;
+            /* 空冲突链表数量大于n*10 */
             if (--empty_visits == 0) return 1;
         }
         de = d->ht[0].table[d->rehashidx];
         /* Move all the keys in this bucket from the old to the new hash HT */
+        /* 遍历冲突链上的所有元素，将ht[0]上的元素按照采用头插法移到ht[1]上 */
         while(de) {
             uint64_t h;
 
@@ -218,6 +226,13 @@ int dictRehash(dict *d, int n) {
     }
 
     /* Check if we already rehashed the whole table... */
+    /* ht[0].used == 0 代表ht[0]中的元素已经全部转移到ht[1]
+     * 1.释放ht[0].table
+     * 2. 将ht[0]指向扩容后的ht[1]
+     * 3. 重置d->ht[1]
+     * 4. d->rehashidx = -1，表示现在未进行扩容
+     * 5. 至此扩容完成
+     * */
     if (d->ht[0].used == 0) {
         zfree(d->ht[0].table);
         d->ht[0] = d->ht[1];
@@ -301,6 +316,7 @@ dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing)
 
     /* Get the index of the new element, or -1 if
      * the element already exists. */
+    /* 计算参数key的hash表数组索引，返回-1 代表此key已经存在(注意，这里是key存在而非key计算后的hash存在) */
     if ((index = _dictKeyIndex(d, key, dictHashKey(d,key), existing)) == -1)
         return NULL;
 
@@ -308,13 +324,16 @@ dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing)
      * Insert the element in top, with the assumption that in a database
      * system it is more likely that recently added entries are accessed
      * more frequently. */
+    /* 如果该字典正在扩容，则将新的dictEntry 添加到ht[1]中，否则添加到ht[0]中 */
     ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0];
     entry = zmalloc(sizeof(*entry));
+    /* 使用头插法将dictEntry添加到桶的冲突链上 */
     entry->next = ht->table[index];
     ht->table[index] = entry;
     ht->used++;
 
     /* Set the hash entry fields. */
+    /* 将key设置到dictEntry中 */
     dictSetKey(d, entry, key);
     return entry;
 }
@@ -964,6 +983,14 @@ static int _dictExpandIfNeeded(dict *d)
      * table (global setting) or we should avoid it but the ratio between
      * elements/buckets is over the "safe" threshold, we resize doubling
      * the number of buckets. */
+    /*
+     * 扩容条件
+     * 1. d->ht[0].used >= d->ht[0].size 即ht[0]所有冲突链上的dictEntry大于桶的size
+     * 2. 开启了dict_can_resize或者负载因子大于dict_force_resize_ratio
+     * 负载因子: d->ht[0].used/d->ht[0].size
+     * dict_can_resize默认开启，因此负载因子达到1时，就扩容，此时可能会有比较高的hash冲突
+     * dict_can_resize关闭，因此负载因子达到5时，才扩容
+     * */
     if (d->ht[0].used >= d->ht[0].size &&
         (dict_can_resize ||
          d->ht[0].used/d->ht[0].size > dict_force_resize_ratio))
@@ -1002,10 +1029,12 @@ static long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **e
     /* Expand the hash table if needed */
     if (_dictExpandIfNeeded(d) == DICT_ERR)
         return -1;
+    /* 遍历ht[0] ht[1] 1.计算Hash表数组索引 2.判断hash表是否已存在参数key */
     for (table = 0; table <= 1; table++) {
         idx = hash & d->ht[table].sizemask;
         /* Search if this slot does not already contain the given key */
         he = d->ht[table].table[idx];
+        /* 之所以要遍历整个冲突链，是因为冲突链中可能出现与参数key相同的dictEntry */
         while(he) {
             if (key==he->key || dictCompareKeys(d, key, he->key)) {
                 if (existing) *existing = he;
@@ -1013,6 +1042,7 @@ static long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **e
             }
             he = he->next;
         }
+        /* 如果当前没有扩容操作，则计算ht[0]索引后便退出，不必再计算ht[1] */
         if (!dictIsRehashing(d)) break;
     }
     return idx;

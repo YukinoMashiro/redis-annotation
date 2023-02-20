@@ -70,7 +70,7 @@ typedef struct dictht {
     dictEntry **table;
     unsigned long size;
     unsigned long sizemask;
-    unsigned long used;
+    unsigned long used; /* hash表中存储键值对的数量，即此hash表中各个冲突链中dictEntry的和 */
 } dictht;
 
 typedef struct dict {
@@ -145,7 +145,7 @@ typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
 #define dictGetDoubleVal(he) ((he)->v.d)
 #define dictSlots(d) ((d)->ht[0].size+(d)->ht[1].size)
 #define dictSize(d) ((d)->ht[0].used+(d)->ht[1].used)
-#define dictIsRehashing(d) ((d)->rehashidx != -1)
+#define dictIsRehashing(d) ((d)->rehashidx != -1) /* 等于-1 代表没有在扩容 */
 
 /* API */
 dict *dictCreate(dictType *type, void *privDataPtr);

@@ -79,8 +79,8 @@ typedef struct aeFileEvent {
 /* Time event structure */
 typedef struct aeTimeEvent {
     long long id; /* time event identifier. */
-    long when_sec; /* seconds */
-    long when_ms; /* milliseconds */
+    long when_sec; /* seconds */ /* 事件事件下一次执行的秒数(UNIX事件戳)和剩余毫秒数 */
+    long when_ms; /* milliseconds */ /* 事件事件下一次执行的剩余毫秒数 */
     aeTimeProc *timeProc;
     aeEventFinalizerProc *finalizerProc;
     void *clientData;
@@ -100,9 +100,9 @@ typedef struct aeFiredEvent {
 typedef struct aeEventLoop {
     int maxfd;   /* highest file descriptor currently registered */
     int setsize; /* max number of file descriptors tracked */
-    long long timeEventNextId;
+    long long timeEventNextId;/* 下一个事件ID */
     time_t lastTime;     /* Used to detect system clock skew */
-    aeFileEvent *events; /* Registered events */
+    aeFileEvent *events; /* Registered events */ /* 数组索引为文件描述符，数组值为文件事件 */
     aeFiredEvent *fired; /* Fired events */
     aeTimeEvent *timeEventHead;
     int stop;
