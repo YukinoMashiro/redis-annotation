@@ -104,15 +104,20 @@ client *createClient(connection *conn) {
      * This is useful since all the commands needs to be executed
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
+    /* 如果conn参数为NULL，则创建伪客户端 */
     if (conn) {
+        /* 将文件描述符设置为非阻塞模式 */
         connNonBlock(conn);
+        /* 关闭TCP的Delay选项 */
         connEnableTcpNoDelay(conn);
+        /* 开启TCP的keepAlive选项，服务器定时向空闲客户端发送ACK进行探测 */
         if (server.tcpkeepalive)
             connKeepAlive(conn,server.tcpkeepalive);
         connSetReadHandler(conn, readQueryFromClient);
+        /* 将client赋值给conn.private_data */
         connSetPrivateData(conn, c);
     }
-
+    /* 选择0号数据库并初始化client属性 */
     selectDb(c,0);
     uint64_t client_id = ++server.next_client_id;
     c->id = client_id;
@@ -945,6 +950,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
+    /* 如果client数量加上Cluster数量已经超过最大配置，则返回错误连接信息并关闭连接 */
     if (listLength(server.clients) + getClusterConnectionsCount()
         >= server.maxclients)
     {
@@ -967,6 +973,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     }
 
     /* Create connection and client */
+    /* 创建client结构体，存储客户端数据 */
     if ((c = createClient(conn)) == NULL) {
         serverLog(LL_WARNING,
             "Error registering fd event for the new client: %s (conn: %s)",
@@ -987,6 +994,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
      *
      * Because of that, we must do nothing else afterwards.
      */
+    /* 设置clientAcceptHandler为Accept回调函数 */
     if (connAccept(conn, clientAcceptHandler) == C_ERR) {
         char conninfo[100];
         if (connGetState(conn) == CONN_STATE_ERROR)
@@ -1005,7 +1013,12 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(mask);
     UNUSED(privdata);
 
+    /* 每次事件循环中最多接收1000个客户请求，防止短时间内处理过多客户请求导致进程阻塞 */
     while(max--) {
+        /* 调用C语言的accept函数接收新的客户端连接，并返回数据套接字文件描述符。
+         * 如果当前没有待处理的连接请求，则返回ANET_ERR，这时会退出函数。当有新的连接请求进来时。
+         * Redis事件循环器会重新调用acceptTcpHandler
+         * */
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
@@ -1014,6 +1027,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
+        /* connCreateAcceptedSocket函数创建并返回connection结构体，conn->type指向CT_Socket  */
         acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip);
     }
 }

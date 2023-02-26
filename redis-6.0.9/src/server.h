@@ -790,13 +790,13 @@ typedef struct client {
     int resp;               /* RESP protocol version. Can be 2 or 3. */
     redisDb *db;            /* Pointer to currently SELECTed DB. */
     robj *name;             /* As set by CLIENT SETNAME. */
-    sds querybuf;           /* Buffer we use to accumulate client queries. */
-    size_t qb_pos;          /* The position we have read in querybuf. */
+    sds querybuf;           /* Buffer we use to accumulate client queries. */ /* 查询缓冲区，用于存放客户端请求数据 */
+    size_t qb_pos;          /* The position we have read in querybuf. */ /* 查询缓冲区最新读取位置 */
     sds pending_querybuf;   /* If this client is flagged as master, this buffer
                                represents the yet not applied portion of the
                                replication stream that we are receiving from
                                the master. */
-    size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size. */
+    size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size. */ /* 客户端单次读取请求数据的峰值 */
     int argc;               /* Num of arguments of current command. */
     robj **argv;            /* Arguments of current command. */
     size_t argv_len_sum;    /* Sum of lengths of objects in argv list. */
@@ -805,10 +805,10 @@ typedef struct client {
                                user is set to NULL the connection can do
                                anything (admin). */
     int reqtype;            /* Request protocol type: PROTO_REQ_* */
-    int multibulklen;       /* Number of multi bulk arguments left to read. */
-    long bulklen;           /* Length of bulk argument in multi bulk request. */
-    list *reply;            /* List of reply objects to send to the client. */
-    unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */
+    int multibulklen;       /* Number of multi bulk arguments left to read. */ /* 当前解析的命令请求中尚未处理的命令参数数量 */
+    long bulklen;           /* Length of bulk argument in multi bulk request. */ /* 当前读取命令参数长度 */
+    list *reply;            /* List of reply objects to send to the client. */ /* 链表回复缓冲区 */
+    unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */ /* 链表回复缓冲区的字节数 */
     size_t sentlen;         /* Amount of bytes already sent in the current
                                buffer or object being sent. */
     time_t ctime;           /* Client creation time. */
@@ -867,8 +867,8 @@ typedef struct client {
     uint64_t client_cron_last_memory_usage;
     int      client_cron_last_memory_type;
     /* Response buffer */
-    int bufpos;
-    char buf[PROTO_REPLY_CHUNK_BYTES];
+    int bufpos;/* 固定回复缓冲区的最新操作位置 */
+    char buf[PROTO_REPLY_CHUNK_BYTES];/* 固定回复缓冲区 */
 } client;
 
 struct saveparam {

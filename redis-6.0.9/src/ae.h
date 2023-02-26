@@ -70,30 +70,30 @@ typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 
 /* File event structure */
 typedef struct aeFileEvent {
-    int mask; /* one of AE_(READABLE|WRITABLE|BARRIER) */
-    aeFileProc *rfileProc;
-    aeFileProc *wfileProc;
-    void *clientData;
+    int mask; /* one of AE_(READABLE|WRITABLE|BARRIER) */ /* 事件类型 */
+    aeFileProc *rfileProc;/* AE_READABLE事件处理函数 */
+    aeFileProc *wfileProc;/* AE_WRITABLE事件处理函数 */
+    void *clientData;/* 附加数据 */
 } aeFileEvent;
 
 /* Time event structure */
 typedef struct aeTimeEvent {
     long long id; /* time event identifier. */
-    long when_sec; /* seconds */ /* 事件事件下一次执行的秒数(UNIX事件戳)和剩余毫秒数 */
+    long when_sec; /* seconds */ /* 事件事件下一次执行的秒数(UNIX事件戳) */
     long when_ms; /* milliseconds */ /* 事件事件下一次执行的剩余毫秒数 */
-    aeTimeProc *timeProc;
+    aeTimeProc *timeProc;/* 时间事件处理函数 */
     aeEventFinalizerProc *finalizerProc;
-    void *clientData;
-    struct aeTimeEvent *prev;
-    struct aeTimeEvent *next;
+    void *clientData;/* 客户端传入的附加数据 */
+    struct aeTimeEvent *prev;/* 指向前一个时间事件 */
+    struct aeTimeEvent *next;/* 指向后一个时间事件 */
     int refcount; /* refcount to prevent timer events from being
   		   * freed in recursive time event calls. */
 } aeTimeEvent;
 
 /* A fired event */
 typedef struct aeFiredEvent {
-    int fd;
-    int mask;
+    int fd;/* 产生事件的文件描述符 */
+    int mask;/* 产生的事件类型 */
 } aeFiredEvent;
 
 /* State of an event based program */
@@ -104,11 +104,11 @@ typedef struct aeEventLoop {
     time_t lastTime;     /* Used to detect system clock skew */
     aeFileEvent *events; /* Registered events */ /* 数组索引为文件描述符，数组值为文件事件 */
     aeFiredEvent *fired; /* Fired events */
-    aeTimeEvent *timeEventHead;
-    int stop;
-    void *apidata; /* This is used for polling API specific data */
-    aeBeforeSleepProc *beforesleep;
-    aeBeforeSleepProc *aftersleep;
+    aeTimeEvent *timeEventHead;/* 时间事件表的头节点指针 */
+    int stop;/* 事件循环器是否停止 */
+    void *apidata; /* This is used for polling API specific data */ /* 存放用于I/O复用层的附加数据 */
+    aeBeforeSleepProc *beforesleep;/* 进程阻塞前的钩子函数 */
+    aeBeforeSleepProc *aftersleep; /* 进程阻塞后的钩子函数 */
     int flags;
 } aeEventLoop;
 

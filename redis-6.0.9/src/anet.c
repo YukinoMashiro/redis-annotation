@@ -49,7 +49,7 @@
 #include "anet.h"
 
 static void anetSetError(char *err, const char *fmt, ...)
-{
+
     va_list ap;
 
     if (!err) return;

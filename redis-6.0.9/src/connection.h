@@ -71,13 +71,13 @@ typedef struct ConnectionType {
 } ConnectionType;
 
 struct connection {
-    ConnectionType *type;
-    ConnectionState state;
+    ConnectionType *type;/* 包含操作链接通道的函数，如connect、white、read */
+    ConnectionState state;/* 连接状态 */
     short int flags;
     short int refs;
-    int last_errno;
-    void *private_data;
-    ConnectionCallbackFunc conn_handler;
+    int last_errno;/* 该连接最新的errno */
+    void *private_data;/* 用于存放附加数据 */
+    ConnectionCallbackFunc conn_handler;/* 执行连接的回调函数 */
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
     int fd;
