@@ -48,7 +48,7 @@
 
 #include "anet.h"
 
-static void anetSetError(char *err, const char *fmt, ...)
+static void anetSetError(char *err, const char *fmt, ...) {
 
     va_list ap;
 
@@ -64,6 +64,7 @@ int anetSetBlock(char *err, int fd, int non_block) {
     /* Set the socket blocking (if non_block is zero) or non-blocking.
      * Note that fcntl(2) for F_GETFL and F_SETFL can't be
      * interrupted by a signal. */
+    /* 获取fd的属性 */
     if ((flags = fcntl(fd, F_GETFL)) == -1) {
         anetSetError(err, "fcntl(F_GETFL): %s", strerror(errno));
         return ANET_ERR;
@@ -74,6 +75,7 @@ int anetSetBlock(char *err, int fd, int non_block) {
     else
         flags &= ~O_NONBLOCK;
 
+    /* 设置fd的属性 */
     if (fcntl(fd, F_SETFL, flags) == -1) {
         anetSetError(err, "fcntl(F_SETFL,O_NONBLOCK): %s", strerror(errno));
         return ANET_ERR;

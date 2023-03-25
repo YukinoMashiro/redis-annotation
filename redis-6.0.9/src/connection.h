@@ -80,7 +80,7 @@ struct connection {
     ConnectionCallbackFunc conn_handler;/* 执行连接的回调函数 */
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
-    int fd;
+    int fd; /* 数据套接字描述符 */
 };
 
 /* The connection module does not deal with listening and accepting sockets,
