@@ -1498,11 +1498,7 @@ int handleClientsWithPendingWrites(void) {
             {
                 ae_barrier = 1;
             }
-            if (connSetWriteHandlerWi
-
-
-
-            hBarrier(c->conn, sendReplyToClient, ae_barrier) == C_ERR) {
+            if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_barrier) == C_ERR) {
                 freeClientAsync(c);
             }
         }
