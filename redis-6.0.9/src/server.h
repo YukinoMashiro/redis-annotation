@@ -805,7 +805,10 @@ typedef struct client {
     size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size. */ /* 客户端单次读取请求数据的峰值 */
     int argc;               /* Num of arguments of current command. */
     robj **argv;            /* Arguments of current command. */
+
+    // 命令所有参数的长度,即所有参数的<length>之和
     size_t argv_len_sum;    /* Sum of lengths of objects in argv list. */
+
     struct redisCommand *cmd, *lastcmd;  /* Last command executed. */
     user *user;             /* User associated with this connection. If the
                                user is set to NULL the connection can do
@@ -813,9 +816,11 @@ typedef struct client {
     int reqtype;            /* Request protocol type: PROTO_REQ_* */
 
     // 当前解析的命令请求中尚未处理的命令参数数量，它是通过读取RESP协议中的<element-num>得到的
+    // 每解析完命令的一个参数，值就减1
     int multibulklen;       /* Number of multi bulk arguments left to read. */
 
     // 当前读取命令的参数长度,即RESP格式 $<length>\r\n<data>\r\n 中的<length>,初始值为-1
+    // 在读取参数时，才会被赋值
     long bulklen;           /* Length of bulk argument in multi bulk request. */
 
     // 链表回复缓冲区
@@ -1510,9 +1515,15 @@ typedef struct {
 typedef void redisCommandProc(client *c);
 typedef int redisGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
 struct redisCommand {
+    // 命令名称，如SET、GET
     char *name;
+
+    // 命令处理函数，负责执行命令的逻辑
     redisCommandProc *proc;
+
+    // 命令参数数量
     int arity;
+
     char *sflags;   /* Flags as string representation, one char per flag. */
     uint64_t flags; /* The actual flags, obtained from the 'sflags' field. */
     /* Use a function to determine keys arguments in a command line.

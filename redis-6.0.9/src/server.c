@@ -1783,10 +1783,12 @@ void checkChildrenDone(void) {
     if (server.rdb_child_pid != -1 && server.rdb_pipe_conns)
         return;
 
+    // 调用C语言的wait3函数检测是否存在已结束的子进程
     if ((pid = wait3(&statloc,WNOHANG,NULL)) != 0) {
         int exitcode = WEXITSTATUS(statloc);
         int bysignal = 0;
 
+        // 获取子进程的结束代码和中断信号，需要根据这些标志进行不同的逻辑处理
         if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
         /* sigKillChildHandler catches the signal and calls exit(), but we
@@ -1807,6 +1809,10 @@ void checkChildrenDone(void) {
                 (int) server.aof_child_pid,
                 (int) server.module_child_pid);
         } else if (pid == server.rdb_child_pid) {
+
+            // 如果子进程是RDB进程
+            // 更新父进程的server.dirty、server.lastbgsave_status、server.rdb_child_pid
+            // 如果RDB数据保存在磁盘中，则需要将RDB文件发送给正在进行全量同步的从服务器
             backgroundSaveDoneHandler(exitcode,bysignal);
             if (!bysignal && exitcode == 0) receiveChildInfo();
         } else if (pid == server.aof_child_pid) {
@@ -1976,12 +1982,19 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
+
+    // 如果当前程序中存在子进程，则调用checkChildrenDone函数检查是否有子进程已执行完成，如果有，则执行对应的父进程进行收尾
     if (hasActiveChildProcess() || ldbPendingChildren())
     {
         checkChildrenDone();
     } else {
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now. */
+
+        // server.dirty记录上一次生成RDB后，Redis服务器变更了多少个键
+        // 如果同时满足以下条件，则调用rdbSaveBackground函数生成RDB文件
+        // 1. 满足server.saveparams配置的条件(次数和时间)
+        // 2. 上一次RDB操作成功或者现在离上次RDB操作已经过去时间大于CONFIG_BGSAVE_RETRY_DELAY(5s)
         for (j = 0; j < server.saveparamslen; j++) {
             struct saveparam *sp = server.saveparams+j;
 
@@ -1998,7 +2011,11 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                 serverLog(LL_NOTICE,"%d changes in %d seconds. Saving...",
                     sp->changes, (int)sp->seconds);
                 rdbSaveInfo rsi, *rsiptr;
+
+                // 生成一个rdbSaveInfo变量，该变量作为rdbSaveBackground函数的参数，用于控制RDB过程中生成的辅助字段
                 rsiptr = rdbPopulateSaveInfo(&rsi);
+
+                // 生成RDB文件
                 rdbSaveBackground(server.rdb_filename,rsiptr);
                 break;
             }
@@ -2434,7 +2451,10 @@ void initServerConfig(void) {
      * redis.conf using the rename-command directive. */
     server.commands = dictCreate(&commandTableDictType,NULL);
     server.orig_commands = dictCreate(&commandTableDictType,NULL);
+
+    // 加载redisCommandTable数据，将命令名和命令记录到server.commands命令字典中
     populateCommandTable();
+
     server.delCommand = lookupCommandByCString("del");
     server.multiCommand = lookupCommandByCString("multi");
     server.lpushCommand = lookupCommandByCString("lpush");
@@ -3360,6 +3380,8 @@ void call(client *c, int flags) {
 
     /* Send the command to clients in MONITOR mode if applicable.
      * Administrative commands are considered too dangerous to be shown. */
+
+    //  发送命令信息给监控下的客户端
     if (listLength(server.monitors) &&
         !server.loading &&
         !(c->cmd->flags & (CMD_SKIP_MONITOR|CMD_ADMIN)))
@@ -3369,11 +3391,16 @@ void call(client *c, int flags) {
 
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
+
+    // 命令执行前，重置传播标志(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP)，
+    // 这些标志应该只在命令执行过程中开启。由于call可以递归调用，所以执行命令前先清除这些标志
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
     redisOpArray prev_also_propagate = server.also_propagate;
     redisOpArrayInit(&server.also_propagate);
 
     /* Call the command. */
+
+    // 调用命令处理函数redisCommand.proc执行命令处理逻辑
     dirty = server.dirty;
     updateCachedTime(0);
     start = server.ustime;
@@ -3384,6 +3411,8 @@ void call(client *c, int flags) {
 
     /* After executing command, we will close the client after writing entire
      * reply if it is set 'CLIENT_CLOSE_AFTER_COMMAND' flag. */
+
+    // 将CLIENT_CLOSE_AFTER_COMMAND标记（如果存在）替换为CLIENT_CLOSE_AFTER_REPLY，要求尽快关闭客户端
     if (c->flags & CLIENT_CLOSE_AFTER_COMMAND) {
         c->flags &= ~CLIENT_CLOSE_AFTER_COMMAND;
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
@@ -3391,6 +3420,10 @@ void call(client *c, int flags) {
 
     /* When EVAL is called loading the AOF we don't want commands called
      * from Lua to go into the slowlog or to populate statistics. */
+
+    // 如果当前正在加载数据并且当前正在执行的是lua脚本，则清除慢日志，命令统计这个客户端标志，即该命令既不输出到慢日志，也不添加到命令统计中
+    // 在lua脚本中调用redis.call函数，Redis会构建伪客户端调用call函数并将真实客户端client记录到client.lua_caller中，这样命令执行过程，
+    // 打开的CLIENT_FORCE_REPL、CLIENT_FORCE_AOF会添加到伪客户端中，所以这里需要转移这些标志
     if (server.loading && c->flags & CLIENT_LUA)
         flags &= ~(CMD_CALL_SLOWLOG | CMD_CALL_STATS);
 
@@ -3564,12 +3597,15 @@ void rejectCommandFormat(client *c, const char *fmt, ...) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
+    // 触发Module Filter
     moduleCallCommandFilters(c);
 
     /* The QUIT command is handled separately. Normal command procs will
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
      * a regular command proc. */
+
+    // 针对quit命令进行处理，给client添加CLIENT_CLOSE_AFTER_REPLY标志，退出
     if (!strcasecmp(c->argv[0]->ptr,"quit")) {
         addReply(c,shared.ok);
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
@@ -3578,6 +3614,8 @@ int processCommand(client *c) {
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
+
+    // 使用命令名，从server.commands命令字典中查找对应的redisCommand，并检查参数数量是否满足命令要求
     c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
     if (!c->cmd) {
         sds args = sdsempty();
@@ -3606,6 +3644,8 @@ int processCommand(client *c) {
 
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */
+
+    // 如果服务器要求客户端身份验证，则检查客户端是否通过身份验证，未通过验证的客户端值只能执行AUTH命令，将拒绝其他命令
     int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
                           (DefaultUser->flags & USER_FLAG_DISABLED)) &&
                         !c->authenticated;
@@ -3620,6 +3660,8 @@ int processCommand(client *c) {
 
     /* Check if the user can run this command according to the current
      * ACLs. */
+
+    // 根据ACL权限控制列表，检查该客户端是否有权限执行该命令
     int acl_keypos;
     int acl_retval = ACLCheckCommandPerm(c,&acl_keypos);
     if (acl_retval != ACL_OK) {
@@ -3639,6 +3681,8 @@ int processCommand(client *c) {
      * However we don't perform the redirection if:
      * 1) The sender of this command is our master.
      * 2) The command has no key arguments. */
+
+    // 如果该服务器运行在cluster模式下，并且当前节点不是该命令的键的存储节点，则返回ASK或MOVED通知客户端请求真正的存储节点
     if (server.cluster_enabled &&
         !(c->flags & CLIENT_MASTER) &&
         !(c->flags & CLIENT_LUA &&
@@ -3667,6 +3711,8 @@ int processCommand(client *c) {
      * the event loop since there is a busy Lua script running in timeout
      * condition, to avoid mixing the propagation of scripts with the
      * propagation of DELs due to eviction. */
+
+    // 如果该服务器配置了内存最大限制maxmemory，则检查内存占用情况，并在有需要时进行数据淘汰。如果数据淘汰失败，则拒绝命令
     if (server.maxmemory && !server.lua_timedout) {
         int out_of_memory = freeMemoryIfNeededAndSafe() == C_ERR;
         /* freeMemoryIfNeeded may flush slave output buffers. This may result
@@ -3700,10 +3746,15 @@ int processCommand(client *c) {
 
     /* Make sure to use a reasonable amount of memory for client side
      * caching metadata. */
+
+    // Redis Tracking机制要求服务器记录客户端查询过的键，如果服务器记录的键的数量大于server.tracking_table_max_keys配置，
+    // 那么则随机删除其中一些键，并向对应的客户端发送失效消息
     if (server.tracking_clients) trackingLimitUsedSlots();
 
     /* Don't accept write commands if there are problems persisting on disk
      * and if this is a master instance. */
+
+    // 如果该服务器是主节点并且当前存在持久化错误，则拒绝命令
     int deny_write_type = writeCommandsDeniedByDiskError();
     if (deny_write_type != DISK_ERROR_TYPE_NONE &&
         server.masterhost == NULL &&
@@ -3720,6 +3771,8 @@ int processCommand(client *c) {
 
     /* Don't accept write commands if there are not enough good slaves and
      * user configured the min-slaves-to-write option. */
+
+    // 如果该服务器是主节点并且正常从服务器数量小于server.min-slaves-to-write配置，则拒绝命令
     if (server.masterhost == NULL &&
         server.repl_min_slaves_to_write &&
         server.repl_min_slaves_max_lag &&
@@ -3732,6 +3785,8 @@ int processCommand(client *c) {
 
     /* Don't accept write commands if this is a read only slave. But
      * accept write commands if this is our master. */
+
+    // 如果该服务器是从节点并且客户端非主节点客户端，则拒绝命令
     if (server.masterhost && server.repl_slave_ro &&
         !(c->flags & CLIENT_MASTER) &&
         is_write_command)
@@ -3742,6 +3797,9 @@ int processCommand(client *c) {
 
     /* Only allow a subset of commands in the context of Pub/Sub if the
      * connection is in RESP2 mode. With RESP3 there are no limits. */
+
+    // 客户端处于Pub/Sub模式下，而且使用的是RESP2协议，只支持PING、SUBSCRIBE、UNSUBSCRIBE、PSUBSCRIBE、PUNSUBSCRIBE命令拒绝其他命令
+    // Redis 6新增了RESP3协议
     if ((c->flags & CLIENT_PUBSUB && c->resp == 2) &&
         c->cmd->proc != pingCommand &&
         c->cmd->proc != subscribeCommand &&
@@ -3758,6 +3816,9 @@ int processCommand(client *c) {
     /* Only allow commands with flag "t", such as INFO, SLAVEOF and so on,
      * when slave-serve-stale-data is no and we are a slave with a broken
      * link with master. */
+
+    // 该服务器是从服务器并且与主节点处于断连状态，拒绝查询数据的命令(可以执行INFO之类的命令)。
+    // 可以通过关闭服务器server.slave-serve-stale-data配置跳过该检查，允许服务器返回过期数据
     if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED &&
         server.repl_serve_stale_data == 0 &&
         is_denystale_command)
@@ -3768,6 +3829,8 @@ int processCommand(client *c) {
 
     /* Loading DB? Return an error if the command has not the
      * CMD_LOADING flag. */
+
+    // 服务器正在加载数据，只有特定命令能执行
     if (server.loading && is_denyloading_command) {
         rejectCommand(c, shared.loadingerr);
         return C_OK;
@@ -3779,6 +3842,8 @@ int processCommand(client *c) {
      * the MULTI plus a few initial commands refused, then the timeout
      * condition resolves, and the bottom-half of the transaction gets
      * executed, see Github PR #7022. */
+
+    // 服务器处于lua脚本超时状态，只有特定命令能执行
     if (server.lua_timedout &&
           c->cmd->proc != authCommand &&
           c->cmd->proc != helloCommand &&
@@ -3799,6 +3864,8 @@ int processCommand(client *c) {
     }
 
     /* Exec the command */
+
+    // 如果当前client处于事务上下文中，那么除EXEC、DISCARD、MULTI和WATCH外的命令都会被入队到事务队列中，否则执行命令
     if (c->flags & CLIENT_MULTI &&
         c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand)

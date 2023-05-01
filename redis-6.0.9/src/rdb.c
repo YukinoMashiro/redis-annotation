@@ -1056,12 +1056,16 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
     int savelfu = server.maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
     /* Save the expire time */
+
+    // 如果设置了过期时间，则写入RDB_OPCODE_EXPIRETIME_MS标志和过期时间戳
     if (expiretime != -1) {
         if (rdbSaveType(rdb,RDB_OPCODE_EXPIRETIME_MS) == -1) return -1;
         if (rdbSaveMillisecondTime(rdb,expiretime) == -1) return -1;
     }
 
     /* Save the LRU info. */
+
+    // 如果Redis内存淘汰策略使用的是LRU算法或者LFU算法，则记录键的空闲时间或者LFU计数
     if (savelru) {
         uint64_t idletime = estimateObjectIdleTime(val);
         idletime /= 1000; /* Using seconds is enough and requires less space.*/
@@ -1082,6 +1086,9 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
     }
 
     /* Save type, key, value */
+
+    // 写入RDB键值对标志，再写入键内容（以字符数组格式保存），最后写入值内容
+    // 键值对存储格式<键值对标志><键><值>
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
     if (rdbSaveStringObject(rdb,key) == -1) return -1;
     if (rdbSaveObject(rdb,val,key) == -1) return -1;
@@ -1201,11 +1208,19 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
 
     if (server.rdb_checksum)
         rdb->update_cksum = rioGenericUpdateChecksum;
+
+    // 写入RDB标志，内容为"REDIS<VERSION>",标志该文件时RDB文件
     snprintf(magic,sizeof(magic),"REDIS%04d",RDB_VERSION);
     if (rdbWriteRaw(rdb,magic,9) == -1) goto werr;
+
+    // 写入辅助字段,redis-ver、redis-bits、ctime、used-mem、repl-stream-db、repl-id、repl-offset
+    // 其中repl-stream-db、repl-id、repl-offset用于主从复制机制
     if (rdbSaveInfoAuxFields(rdb,rdbflags,rsi) == -1) goto werr;
+
+    // 与Module有关
     if (rdbSaveModulesAux(rdb, REDISMODULE_AUX_BEFORE_RDB) == -1) goto werr;
 
+    // 遍历所有的数据库redisDB
     for (j = 0; j < server.dbnum; j++) {
         redisDb *db = server.db+j;
         dict *d = db->dict;
@@ -1213,10 +1228,16 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         di = dictGetSafeIterator(d);
 
         /* Write the SELECT DB opcode */
+
+        // 写入RDB_OPCODE_SELECTDB标志
         if (rdbSaveType(rdb,RDB_OPCODE_SELECTDB) == -1) goto werr;
+
+        // 写入数据库ID
         if (rdbSaveLen(rdb,j) == -1) goto werr;
 
         /* Write the RESIZE DB opcode. */
+
+        // 写入RDB_OPCODE_RESIZEDB标志和数据库字典大小、过期字典大小
         uint64_t db_size, expires_size;
         db_size = dictSize(db->dict);
         expires_size = dictSize(db->expires);
@@ -1225,6 +1246,8 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         if (rdbSaveLen(rdb,expires_size) == -1) goto werr;
 
         /* Iterate this DB writing every entry */
+
+        // 遍历数据库的键值对
         while((de = dictNext(di)) != NULL) {
             sds keystr = dictGetKey(de);
             robj key, *o = dictGetVal(de);
@@ -1232,6 +1255,8 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
 
             initStaticStringObject(key,keystr);
             expire = getExpire(db,&key);
+
+            // 将每个键值对的键、值、过期时间写入RDB文件
             if (rdbSaveKeyValuePair(rdb,&key,o,expire) == -1) goto werr;
 
             /* When this RDB is produced as part of an AOF rewrite, move
@@ -1252,6 +1277,8 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
      * the script cache as well: on successful PSYNC after a restart, we need
      * to be able to process any EVALSHA inside the replication backlog the
      * master will send us. */
+
+    // 执行到这里，所有数据库的数据都已经写入RDB文件。这里将Redis中Lua脚本内容写入RDB文件
     if (rsi && dictSize(server.lua_scripts)) {
         di = dictGetIterator(server.lua_scripts);
         while((de = dictNext(di)) != NULL) {
@@ -1266,10 +1293,14 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     if (rdbSaveModulesAux(rdb, REDISMODULE_AUX_AFTER_RDB) == -1) goto werr;
 
     /* EOF opcode */
+
+    // 写入结束标志RDB_OPCODE_EOF
     if (rdbSaveType(rdb,RDB_OPCODE_EOF) == -1) goto werr;
 
     /* CRC64 checksum. It will be zero if checksum computation is disabled, the
      * loading code skips the check in this case. */
+
+    // 写入CRC64校验码
     cksum = rdb->cksum;
     memrev64ifbe(&cksum);
     if (rioWrite(rdb,&cksum,8) == 0) goto werr;
@@ -1318,6 +1349,7 @@ int rdbSave(char *filename, rdbSaveInfo *rsi) {
     rio rdb;
     int error = 0;
 
+    // 打开临时文件用于保存数据
     snprintf(tmpfile,256,"temp-%d.rdb", (int) getpid());
     fp = fopen(tmpfile,"w");
     if (!fp) {
@@ -1331,18 +1363,24 @@ int rdbSave(char *filename, rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
+    // 初始化rio变量，次变量用于读写文件
     rioInitWithFile(&rdb,fp);
     startSaving(RDBFLAGS_NONE);
 
+    // 如果配置了server.rdb_save_incremental_fsync，则将该配置赋值给rio.io.file.autosync属性
+    // 当系统缓存的数据量大于该属性值时，Redis将执行一次"fsync"
     if (server.rdb_save_incremental_fsync)
         rioSetAutoSync(&rdb,REDIS_AUTOSYNC_BYTES);
 
+    // 将数据库的内容写到临时文件
     if (rdbSaveRio(&rdb,&error,RDBFLAGS_NONE,rsi) == C_ERR) {
         errno = error;
         goto werr;
     }
 
     /* Make sure data will not remain on the OS's output buffers */
+
+    // 调用fflush函数、fsync函数将系统缓存刷新到文件中
     if (fflush(fp)) goto werr;
     if (fsync(fileno(fp))) goto werr;
     if (fclose(fp)) { fp = NULL; goto werr; }
@@ -1350,6 +1388,8 @@ int rdbSave(char *filename, rdbSaveInfo *rsi) {
     
     /* Use RENAME to make sure the DB file is changed atomically only
      * if the generate DB file is ok. */
+
+    // 重命名临时文件，替换旧的RDB文件。RDB文件名由server.rdb_filename指定
     if (rename(tmpfile,filename) == -1) {
         char *cwdp = getcwd(cwd,MAXPATHLEN);
         serverLog(LL_WARNING,
@@ -1364,6 +1404,7 @@ int rdbSave(char *filename, rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
+    // 如果在主进程调用rdbSave函数，则需要在这里修改server函数
     serverLog(LL_NOTICE,"DB saved on disk");
     server.dirty = 0;
     server.lastsave = time(NULL);
@@ -1388,19 +1429,30 @@ int rdbSaveBackground(char *filename, rdbSaveInfo *rsi) {
     server.lastbgsave_try = time(NULL);
     openChildInfoPipe();
 
+    // redisFork函数创建RDB进程
+    // fork函数调用一次，却分别在父进程、子进程两处返回。该函数在父进程返回子进程PID，在子进程返回0
     if ((childpid = redisFork(CHILD_TYPE_RDB)) == 0) {
         int retval;
 
         /* Child */
         redisSetProcTitle("redis-rdb-bgsave");
+
+        // 尽可能将RDB进程绑定到用户配置的CPU列表bgsave_cpulist上，减少不要的进程切换，最大限度地提高性能
         redisSetCpuAffinity(server.bgsave_cpulist);
+
+        // RDB进程执行这里的代码，调用rdbSave函数生成RDB文件
         retval = rdbSave(filename,rsi);
         if (retval == C_OK) {
             sendChildCOWInfo(CHILD_TYPE_RDB, "RDB");
         }
+
+        // 退出RDB进程
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
+
+        // 主进程执行这里的代码，更新server的运行时数据。server.rdb_child_pid记录RDB进程ID
+        // ID不为-1代表当前Redis中存在RDB进程
         if (childpid == -1) {
             closeChildInfoPipe();
             server.lastbgsave_status = C_ERR;

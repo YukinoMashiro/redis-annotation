@@ -1362,7 +1362,10 @@ int writeToClient(client *c, int handler_installed) {
     size_t objlen;
     clientReplyBlock *o;
 
+    //  回复缓冲区存在数据
     while(clientHasPendingReplies(c)) {
+printf("yukino has data \r\n");
+        // 固定缓冲区写入TCP
         if (c->bufpos > 0) {
             nwritten = connWrite(c->conn,c->buf+c->sentlen,c->bufpos-c->sentlen);
             if (nwritten <= 0) break;
@@ -1371,11 +1374,15 @@ int writeToClient(client *c, int handler_installed) {
 
             /* If the buffer was sent, set bufpos to zero to continue with
              * the remainder of the reply. */
+
+            // 如果缓冲区已发送，则将 bufpos 设置为零以继续回复的其余部分
             if ((int)c->sentlen == c->bufpos) {
                 c->bufpos = 0;
                 c->sentlen = 0;
             }
         } else {
+
+            // 不固定回复缓冲区写入TCP
             o = listNodeValue(listFirst(c->reply));
             objlen = o->used;
 
@@ -1413,6 +1420,8 @@ int writeToClient(client *c, int handler_installed) {
          * Moreover, we also send as much as possible if the client is
          * a slave or a monitor (otherwise, on high-speed traffic, the
          * replication/output buffer will grow indefinitely) */
+
+        // 我们避免发送超过 NET_MAX_WRITES_PER_EVENT 字节，在单线程服务器中，最好也为其他客户端提供服务
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
             (server.maxmemory == 0 ||
              zmalloc_used_memory() < server.maxmemory) &&
@@ -1442,6 +1451,8 @@ int writeToClient(client *c, int handler_installed) {
          * adDeleteFileEvent() is not thread safe: however writeToClient()
          * is always called with handler_installed set to 0 from threads
          * so we are fine. */
+
+        // connSetWriteHandler(c->conn, NULL) 最终回删除文件事件
         if (handler_installed) connSetWriteHandler(c->conn, NULL);
 
         /* Close connection after entire reply has been sent. */
@@ -1464,6 +1475,8 @@ void sendReplyToClient(connection *conn) {
  * need to use a syscall in order to install the writable event handler,
  * get it called, and so forth. */
 int handleClientsWithPendingWrites(void) {
+
+    // 遍历server.clients_pending_write
     listIter li;
     listNode *ln;
     int processed = listLength(server.clients_pending_write);
@@ -1482,10 +1495,16 @@ int handleClientsWithPendingWrites(void) {
         if (c->flags & CLIENT_CLOSE_ASAP) continue;
 
         /* Try to write buffers to the client socket. */
+
+        // 将client回复缓冲区内容写入TCP发送缓冲区
         if (writeToClient(c,0) == C_ERR) continue;
 
         /* If after the synchronous writes above we still have data to
          * output to the client, we need to install the writable handler. */
+
+        // 如果client回复缓冲区还有数据，则说明client回复缓冲区的内容过多，无法一次性写到TCP缓冲区中
+        // 这时要为当前连接注册监听WRITEABLE类型的文件事件，事件回掉为sendReplyToClient
+        // 等到TCP发送缓冲区可写后，该函数负责继续写入数据
         if (clientHasPendingReplies(c)) {
             int ae_barrier = 0;
             /* For the fsync=always policy, we want that a given FD is never
@@ -2052,14 +2071,15 @@ void readQueryFromClient(connection *conn) {
      * processMultiBulkBuffer() can avoid copying buffers to create the
      * Redis Object representing the argument. */
 
-    // 如果当前读取的是超大参数，则需要保证查询缓冲区中只有当前参数数据
-    // c->bulklen >= PROTO_MBULK_BIG_ARG 代表超大参数
     // c->multibulklen != 0 当前解析的命令请求中尚未处理的命令参数数量不为0，即代表发生了拆包，即上次并没有读取一个完整的命令请求
-    // c->bulklen 代表的是客户端输入的完整的字符长度，并非拆包后单次的长度
+    // c->bulklen != -1，初始值为-1,在读取参数时才会被赋值，这里为0只存在与拆包情况
+    // c->bulklen >= PROTO_MBULK_BIG_ARG 代表超大参数
     if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1
         && c->bulklen >= PROTO_MBULK_BIG_ARG)
     {
         // 拆包情况，非第一次，参数剩余未读取的长度 +2 ？？？
+        // +2是指 "\r\n"的长度
+        // 因为拆包的原因，应该把参数长度多出缓冲区的部分，重新赋值为要读取的长度
         ssize_t remaining = (size_t)(c->bulklen+2)-sdslen(c->querybuf);
 
         /* Note that the 'remaining' variable may be zero in some edge case,
@@ -2079,6 +2099,7 @@ void readQueryFromClient(connection *conn) {
 
     // 从socket读取数据，返回实际读取字节数
     // c->querybuf+qblen 读取的数据存储到c->querybuf的空白位置，说明c->querybuf保存的应该是多次读取的结果
+    // 此时c->querybuf读取了命令的数据
     nread = connRead(c->conn, c->querybuf+qblen, readlen);
     if (nread == -1) {
         if (connGetState(conn) == CONN_STATE_CONNECTED) {
